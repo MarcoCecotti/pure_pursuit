@@ -93,7 +93,7 @@ private:
   
 };
 
-PurePursuit::PurePursuit() : ld_(1.0), v_max_(0.1), v_(v_max_), w_max_(1.0), pos_tol_(0.1), idx_(0),
+PurePursuit::PurePursuit() : ld_(1.0), v_max_(1.5), v_(v_max_), w_max_(1.0), pos_tol_(0.1), idx_(0),
                              goal_reached_(true), nh_private_("~"), tf_listener_(tf_buffer_),
                              map_frame_id_("map"), robot_frame_id_("base_link"),
                              lookahead_frame_id_("lookahead")
@@ -102,6 +102,7 @@ PurePursuit::PurePursuit() : ld_(1.0), v_max_(0.1), v_(v_max_), w_max_(1.0), pos
   nh_private_.param<double>("wheelbase", L_, 1.0);
   nh_private_.param<double>("lookahead_distance", ld_, 1.0);
   //nh_private_.param<double>("linear_velocity", v_, 0.1);
+  nh_private_.param<double>("max_linear_velocity", v_max_, 1.5);
   nh_private_.param<double>("max_rotational_velocity", w_max_, 1.0);
   nh_private_.param<double>("position_tolerance", pos_tol_, 0.1);
   nh_private_.param<double>("steering_angle_velocity", delta_vel_, 100.0);
@@ -128,7 +129,7 @@ PurePursuit::PurePursuit() : ld_(1.0), v_max_(0.1), v_(v_max_), w_max_(1.0), pos
   sub_path_ = nh_.subscribe("path_segment", 1, &PurePursuit::receivePath, this);
   sub_odom_ = nh_.subscribe("odometry", 1, &PurePursuit::computeVelocities, this);
   pub_vel_ = nh_.advertise<geometry_msgs::Twist>("cmd_vel", 1);
-  pub_acker_ = nh_.advertise<ackermann_msgs::AckermannDriveStamped>("cmd_acker", 1);
+  pub_acker_ = nh_.advertise<ackermann_msgs::AckermannDriveStamped>("cmd_ack", 1);
 
   reconfigure_callback_ = boost::bind(&PurePursuit::reconfigure, this, _1, _2);
   reconfigure_server_.setCallback(reconfigure_callback_);
