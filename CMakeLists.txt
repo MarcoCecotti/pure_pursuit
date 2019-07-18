@@ -14,7 +14,10 @@ find_package(catkin REQUIRED COMPONENTS
   tf2_ros
   rospy
   dynamic_reconfigure
+  cmake_modules
 )
+
+find_package(Eigen REQUIRED)
 
 find_package(orocos_kdl REQUIRED)
 
@@ -38,6 +41,8 @@ catkin_package(
 ## Build ##
 ###########
 include_directories(${catkin_INCLUDE_DIRS})
+
+include_directories(${Eigen_INCLUDE_DIRS})
 
 ## Declare a cpp executable
 add_executable(pure_pursuit src/pure_pursuit.cpp)

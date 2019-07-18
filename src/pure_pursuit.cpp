@@ -18,6 +18,8 @@
 #include <nav_msgs/Odometry.h>
 #include <ackermann_msgs/AckermannDriveStamped.h>
 
+#include <Eigen/Geometry> 
+
 #include <kdl/frames.hpp>
 
 // TODO: Figure out how to use tf2 DataConversions
@@ -52,6 +54,36 @@ public:
   double distance(T1 pt1, T2 pt2)
   {
     return sqrt(pow(pt1.x - pt2.x,2) + pow(pt1.y - pt2.y,2) + pow(pt1.z - pt2.z,2));
+  }
+
+  geometry_msgs::Pose intermediate_pose(const geometry_msgs::Pose& first_pose, const geometry_msgs::Pose& second_pose,
+      const geometry_msgs::Pose& ref_pose, const double& ref_distance)
+  {
+    // find all sides of triangle between first_pose, second_pose and ref_pose
+    double d1 = distance(ref_pose.position, first_pose.position);
+    double d2 = distance(ref_pose.position, second_pose.position);
+    double d3 = distance(first_pose.position, second_pose.position);
+    // find angle between d2 and d3 (law of cosines)
+    double second_angle = acos((pow(d2,2)+pow(d3,2)-pow(d1,2))/(2*d2*d3));
+    // find distance from second_pose of an intermediate_pose of distance ref_distance from ref_pose (law of cosines)
+    double intermediate_distance = d2 * cos(second_angle) - sqrt(pow(ref_distance,2)-pow(d2,2)*sin(second_angle));
+    // determine the weight to use to interpolate the intermediate_pose between first_pose and second_pose, based on the pose distance
+    double k = 1 - intermediate_distance/d3;
+    // calculate the intermediate pose
+    geometry_msgs::Pose intermediate_pose;
+    intermediate_pose.position.x = first_pose.position.x * k + second_pose.position.x * (1-k);
+    intermediate_pose.position.y = first_pose.position.y * k + second_pose.position.y * (1-k);
+    intermediate_pose.position.z = first_pose.position.z * k + second_pose.position.z * (1-k);
+    // calculate the average of the quaternions
+    Eigen::Quaternion<double> first_quat(first_pose.orientation.w,first_pose.orientation.x,first_pose.orientation.y,first_pose.orientation.z);
+    Eigen::Quaternion<double> second_quat(second_pose.orientation.w,second_pose.orientation.x,second_pose.orientation.y,second_pose.orientation.z);
+    Eigen::Quaternion<double> intermediate_quat;
+    intermediate_quat = first_quat.slerp(k,second_quat);
+    intermediate_pose.orientation.x = intermediate_quat.x();
+    intermediate_pose.orientation.y = intermediate_quat.y();
+    intermediate_pose.orientation.z = intermediate_quat.z();
+    intermediate_pose.orientation.w = intermediate_quat.w();
+    return intermediate_pose;
   }
 
   //! Run the controller.
@@ -147,26 +179,46 @@ void PurePursuit::computeVelocities(nav_msgs::Odometry odom)
     tf = tf_buffer_.lookupTransform(map_frame_id_, robot_frame_id_, ros::Time(0));
     // We first compute the new point to track, based on our current pose,
     // path information and lookahead distance.
-    for (; idx_ < path_.poses.size(); idx_++)
+    while (idx_ < path_.poses.size() && distance(path_.poses[idx_].pose.position, tf.transform.translation) < ld_)
     {
-      if (distance(path_.poses[idx_].pose.position, tf.transform.translation) > ld_)
-      {
+      idx_++;
+    }
 
-        // Transformed lookahead to base_link frame is lateral error
-        KDL::Frame F_bl_ld = transformToBaseLink(path_.poses[idx_].pose, tf.transform);
-        lookahead_.transform.translation.x = F_bl_ld.p.x();
-        lookahead_.transform.translation.y = F_bl_ld.p.y();
-        lookahead_.transform.translation.z = F_bl_ld.p.z();
-        F_bl_ld.M.GetQuaternion(lookahead_.transform.rotation.x,
-                                lookahead_.transform.rotation.y,
-                                lookahead_.transform.rotation.z,
-                                lookahead_.transform.rotation.w);
-        
-        // TODO: See how the above conversion can be done more elegantly
-        // using tf2_kdl and tf2_geometry_msgs
+    if (!path_.poses.empty() && idx_ < path_.poses.size())
+    {
+      geometry_msgs::Pose lookahead_pose;
+      geometry_msgs::Pose first_pose;
+      geometry_msgs::Pose second_pose;
+      geometry_msgs::Pose ref_pose;
+      
+      second_pose = path_.poses[idx_].pose;
 
-        break;
+      ref_pose.position.x = tf.transform.translation.x;
+      ref_pose.position.y = tf.transform.translation.y;
+      ref_pose.position.z = tf.transform.translation.z;
+      ref_pose.orientation.x = tf.transform.rotation.x;
+      ref_pose.orientation.y = tf.transform.rotation.y;
+      ref_pose.orientation.z = tf.transform.rotation.z;
+      ref_pose.orientation.w = tf.transform.rotation.w;
+
+      if (idx_ < 1){
+        first_pose = ref_pose;
       }
+      else{
+        first_pose = path_.poses[idx_-1].pose;
+      }
+
+      lookahead_pose = intermediate_pose(first_pose, second_pose, ref_pose, ld_);
+
+      // Transformed lookahead to base_link frame is lateral error
+      KDL::Frame F_bl_ld = transformToBaseLink(lookahead_pose, tf.transform);
+      lookahead_.transform.translation.x = F_bl_ld.p.x();
+      lookahead_.transform.translation.y = F_bl_ld.p.y();
+      lookahead_.transform.translation.z = F_bl_ld.p.z();
+      F_bl_ld.M.GetQuaternion(lookahead_.transform.rotation.x,
+                              lookahead_.transform.rotation.y,
+                              lookahead_.transform.rotation.z,
+                              lookahead_.transform.rotation.w);
     }
 
     if (!path_.poses.empty() && idx_ >= path_.poses.size())
