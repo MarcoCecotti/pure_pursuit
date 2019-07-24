@@ -110,6 +110,7 @@ private:
   bool goal_reached_;
   geometry_msgs::Twist cmd_vel_;
   ackermann_msgs::AckermannDriveStamped cmd_acker_;
+  double max_time_without_path_;
 
   // Ros infrastructure
   ros::NodeHandle nh_, nh_private_;
@@ -128,7 +129,7 @@ private:
 PurePursuit::PurePursuit() : ld_(1.0), v_max_(1.5), v_(v_max_), w_max_(1.0), pos_tol_(0.1), idx_(0),
                              goal_reached_(true), nh_private_("~"), tf_listener_(tf_buffer_),
                              map_frame_id_("map"), robot_frame_id_("base_link"),
-                             lookahead_frame_id_("lookahead")
+                             lookahead_frame_id_("lookahead"), max_time_without_path_(5.0)
 {
   // Get parameters from the parameter server
   nh_private_.param<double>("wheelbase", L_, 1.0);
@@ -148,6 +149,7 @@ PurePursuit::PurePursuit() : ld_(1.0), v_max_(1.5), v_(v_max_), w_max_(1.0), pos
   nh_private_.param<string>("lookahead_frame_id", lookahead_frame_id_, "lookahead");
   // Frame attached to midpoint of front axle (for front-steered vehicles).
   nh_private_.param<string>("ackermann_frame_id", acker_frame_id_, "rear_axle_midpoint");
+  nh_private_.param<double>("max_time_without_path", max_time_without_path_, 5.0);
 
   // Populate messages with static data
   lookahead_.header.frame_id = robot_frame_id_;
@@ -173,7 +175,7 @@ void PurePursuit::computeVelocities(const geometry_msgs::PoseStamped &pose_unuse
   // Odometry is not used directly, but through the tf tree.
   unsigned idx = idx_;
 
-  if (!path_.poses.empty())
+  if (!path_.poses.empty() && (ros::Time::now() - path_.header.stamp) < ros::Duration(max_time_without_path_))
   {
     // Get the current robot pose
     geometry_msgs::TransformStamped tf;
@@ -290,7 +292,15 @@ void PurePursuit::computeVelocities(const geometry_msgs::PoseStamped &pose_unuse
         cmd_vel_.angular.z = std::min(2 * v_ / ld_2 * yt, w_max_);
 
         // Compute desired Ackermann steering angle
-        cmd_acker_.drive.steering_angle = std::min(atan2(2 * yt * L_, ld_2), delta_max_);
+        yt = yt;
+        if (yt >= 0)
+        {
+          cmd_acker_.drive.steering_angle = std::min(atan2(2 * yt * L_, ld_2), delta_max_);
+        }
+        else
+        {
+          cmd_acker_.drive.steering_angle = std::max(atan2(2 * yt * L_, ld_2), -delta_max_);
+        }
 
         // Set linear velocity for tracking.
         cmd_vel_.linear.x = v_;
@@ -319,25 +329,42 @@ void PurePursuit::computeVelocities(const geometry_msgs::PoseStamped &pose_unuse
         cmd_acker_.drive.steering_angle = 0.0;
         cmd_acker_.drive.speed = 0.0;
       }
-
-      // Publish the lookahead target transform.
-      lookahead_.header.stamp = ros::Time::now();
-      if (isfinite(lookahead_.transform.translation.x))
-        tf_broadcaster_.sendTransform(lookahead_);
-      else
-        std::cout << "Problem with the transform" << std::endl;
-
-      // Publish the velocities
-      pub_vel_.publish(cmd_vel_);
-
-      // Publish ackerman steering setpoints
-      pub_acker_.publish(cmd_acker_);
     }
     catch (tf2::TransformException &ex)
     {
       ROS_WARN_STREAM(ex.what());
     }
   }
+  else // if the path is empty or it is too old
+  {
+    // The lookahead target is at our current pose.
+    lookahead_.transform = geometry_msgs::Transform();
+    lookahead_.transform.rotation.w = 1.0;
+    lookahead_.transform.rotation.x = 0.0;
+    lookahead_.transform.rotation.y = 0.0;
+    lookahead_.transform.rotation.z = 0.0;
+
+    // Stop moving.
+    cmd_vel_.linear.x = 0.0;
+    cmd_vel_.angular.z = 0.0;
+
+    cmd_acker_.header.stamp = ros::Time::now();
+    cmd_acker_.drive.steering_angle = 0.0;
+    cmd_acker_.drive.speed = 0.0;
+  }
+  // Publish the lookahead target transform.
+  lookahead_.header.stamp = ros::Time::now();
+  if (isfinite(lookahead_.transform.translation.x))
+    tf_broadcaster_.sendTransform(lookahead_);
+  else
+    std::cout << "Problem with the transform" << std::endl;
+
+  // Publish the velocities
+  pub_vel_.publish(cmd_vel_);
+
+  // Publish ackerman steering setpoints
+  pub_acker_.publish(cmd_acker_);
+
   idx_ = idx;
 }
 
